@@ -7,3 +7,7 @@ coverage/
 .env*
 !.env.example
 *.sql
+*.sql.gz
+*.dump
+*.bak
+*.backup
