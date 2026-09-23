@@ -188,6 +188,24 @@ let memoryChanges: Array<{
   },
 ];
 
+let memoryLoginLogs: Array<{
+  id: number;
+  userEmail: string;
+  status: string;
+  ipAddress: string;
+  userAgent?: string;
+  message: string;
+  createdAt: string;
+}> = [];
+
+let currentActiveSession: {
+  email: string;
+  fullName: string;
+  nip: string;
+  roleTitle: string;
+  loginTime: string;
+} | null = null;
+
 let dbPool: mysql.Pool | null = null;
 let isMySqlConnected = false;
 let mySqlLastError: string | null = null;
@@ -277,6 +295,18 @@ async function initMySqlConnection(): Promise<boolean> {
         \`role_title\` VARCHAR(255) DEFAULT 'Pegawai / Operator GTK',
         \`is_registered\` TINYINT(1) DEFAULT 0,
         \`registered_at\` DATETIME DEFAULT NULL,
+        \`created_at\` DATETIME DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS \`login_logs\` (
+        \`id\` INT AUTO_INCREMENT PRIMARY KEY,
+        \`user_email\` VARCHAR(191) NOT NULL,
+        \`status\` VARCHAR(50) NOT NULL,
+        \`ip_address\` VARCHAR(100) DEFAULT '127.0.0.1',
+        \`user_agent\` TEXT DEFAULT NULL,
+        \`message\` TEXT NOT NULL,
         \`created_at\` DATETIME DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
@@ -407,6 +437,42 @@ async function recordDataChange(
   });
 }
 
+// Helper to log logins to MySQL or memory
+async function recordLoginLog(
+  userEmail: string,
+  status: string,
+  message: string,
+  req?: express.Request,
+) {
+  const ipAddress =
+    (req?.headers["x-forwarded-for"] as string) ||
+    req?.socket?.remoteAddress ||
+    "127.0.0.1";
+  const userAgent = (req?.headers["user-agent"] as string) || "Browser Client";
+  const timestamp = new Date().toISOString();
+
+  if (isMySqlConnected && dbPool) {
+    try {
+      await dbPool.query(
+        "INSERT INTO `login_logs` (`user_email`, `status`, `ip_address`, `user_agent`, `message`) VALUES (?, ?, ?, ?, ?)",
+        [userEmail, status, ipAddress, userAgent, message],
+      );
+    } catch (err) {
+      console.warn("Gagal mencatat ke MySQL login_logs:", err);
+    }
+  }
+
+  memoryLoginLogs.unshift({
+    id: memoryLoginLogs.length + 1,
+    userEmail,
+    status,
+    ipAddress,
+    userAgent,
+    message,
+    createdAt: timestamp,
+  });
+}
+
 // ==========================================
 // API ROUTES (Backend JavaScript / Express)
 // ==========================================
@@ -430,6 +496,7 @@ app.get("/api/database/status", async (req, res) => {
   let docCount = memorySopDocs.length;
   let changeCount = memoryChanges.length;
   let authEmailCount = memoryAuthorizedEmails.length;
+  let loginLogCount = memoryLoginLogs.length;
 
   if (isMySqlConnected && dbPool) {
     try {
@@ -445,10 +512,14 @@ app.get("/api/database/status", async (req, res) => {
       const [aRows]: any = await dbPool.query(
         "SELECT COUNT(*) as count FROM `authorized_emails`",
       );
+      const [lRows]: any = await dbPool.query(
+        "SELECT COUNT(*) as count FROM `login_logs`",
+      );
       userCount = uRows[0]?.count || 0;
       docCount = dRows[0]?.count || 0;
       changeCount = cRows[0]?.count || 0;
       authEmailCount = aRows[0]?.count || 0;
+      loginLogCount = lRows[0]?.count || 0;
     } catch (e) {
       // ignore
     }
@@ -476,6 +547,12 @@ app.get("/api/database/status", async (req, res) => {
         recordCount: userCount,
       },
       {
+        name: "login_logs",
+        description:
+          "Riwayat Log Login, Aktivasi Kata Sandi & Akses Masuk MySQL",
+        recordCount: loginLogCount,
+      },
+      {
         name: "sop_documents",
         description:
           "Naskah Dokumen Resmi POS AP Format PermenPAN-RB No. 35/2012",
@@ -483,7 +560,7 @@ app.get("/api/database/status", async (req, res) => {
       },
       {
         name: "data_changes",
-        description: "Log Audit Riwayat Setiap Perubahan Data",
+        description: "Log Audit Riwayat Setiap Perubahan Data Sistem",
         recordCount: changeCount,
       },
     ],
@@ -712,7 +789,14 @@ app.post("/api/auth/register-password", async (req, res) => {
     memoryAuthorizedEmails[authIdx].registeredAt = new Date().toISOString();
   }
 
-  // 4. Catat ke audit log data_changes
+  // 4. Catat ke audit log data_changes dan login_logs
+  await recordLoginLog(
+    cleanEmail,
+    "REGISTER_PASSWORD",
+    `Pengguna ${fullName} (${cleanEmail}) berhasil mendaftarkan kata sandi baru. Akun aktif.`,
+    req,
+  );
+
   await recordDataChange(
     "AUTH",
     cleanEmail,
@@ -750,9 +834,11 @@ app.post("/api/auth/authorized-emails", async (req, res) => {
         ],
       );
     } catch (err: any) {
-      return res.status(400).json({
-        error: "Email sudah terdaftar dalam whitelist: " + err.message,
-      });
+      return res
+        .status(400)
+        .json({
+          error: "Email sudah terdaftar dalam whitelist: " + err.message,
+        });
     }
   }
 
@@ -864,6 +950,12 @@ app.post("/api/auth/login", async (req, res) => {
 
   // Jika TIDAK ADA dalam whitelist: Tolak langsung!
   if (!isAuthorized) {
+    await recordLoginLog(
+      cleanEmail || "unknown",
+      "FAILED_UNAUTHORIZED",
+      `Login ditolak: Email "${cleanEmail}" tidak terdaftar dalam whitelist izin akses.`,
+      req,
+    );
     await recordDataChange(
       "AUTH",
       cleanEmail || "unknown",
@@ -880,6 +972,12 @@ app.post("/api/auth/login", async (req, res) => {
 
   // Jika ada dalam whitelist tapi BELUM mendaftarkan kata sandi:
   if (!isRegistered) {
+    await recordLoginLog(
+      cleanEmail,
+      "PENDING_REGISTRATION",
+      `Login ditunda: Email "${cleanEmail}" belum mendaftarkan kata sandi di sistem.`,
+      req,
+    );
     return res.status(400).json({
       success: false,
       isPendingRegistration: true,
@@ -925,6 +1023,21 @@ app.post("/api/auth/login", async (req, res) => {
   }
 
   if (user) {
+    currentActiveSession = {
+      email: user.email,
+      fullName: user.fullName,
+      nip: user.nip,
+      roleTitle: user.roleTitle,
+      loginTime: new Date().toISOString(),
+    };
+
+    await recordLoginLog(
+      cleanEmail,
+      "SUCCESS",
+      `Pengguna ${user.fullName} (${cleanEmail}) berhasil login dan sesi aktif di MySQL.`,
+      req,
+    );
+
     await recordDataChange(
       "AUTH",
       cleanEmail,
@@ -934,6 +1047,13 @@ app.post("/api/auth/login", async (req, res) => {
     );
     return res.json({ success: true, user });
   } else {
+    await recordLoginLog(
+      cleanEmail || "unknown",
+      "FAILED_PASSWORD",
+      `Percobaan login gagal (kata sandi salah) untuk email "${cleanEmail}".`,
+      req,
+    );
+
     await recordDataChange(
       "AUTH",
       cleanEmail || "unknown",
@@ -945,6 +1065,70 @@ app.post("/api/auth/login", async (req, res) => {
       .status(401)
       .json({ success: false, message: "Kata sandi tidak sesuai!" });
   }
+});
+
+// 6A. Current Active Session (Tersinkronisasi Backend & MySQL)
+app.get("/api/auth/current-session", (req, res) => {
+  res.json({
+    isAuthenticated: Boolean(currentActiveSession),
+    user: currentActiveSession,
+  });
+});
+
+// 6B. Logout Session
+app.post("/api/auth/logout", async (req, res) => {
+  const userEmail = currentActiveSession?.email || req.body?.email || "unknown";
+  await recordLoginLog(
+    userEmail,
+    "LOGOUT",
+    `Sesi pengguna ${userEmail} telah logout dari aplikasi.`,
+    req,
+  );
+  await recordDataChange(
+    "AUTH",
+    userEmail,
+    "LOGOUT",
+    userEmail,
+    `Pengguna ${userEmail} keluar (logout) dari sistem.`,
+  );
+  currentActiveSession = null;
+  res.json({ success: true, message: "Berhasil keluar dari sistem." });
+});
+
+// 6C. Riwayat Log Login MySQL
+app.get("/api/auth/login-logs", async (req, res) => {
+  if (isMySqlConnected && dbPool) {
+    try {
+      const [rows]: any = await dbPool.query(
+        "SELECT `id`, `user_email` as `userEmail`, `status`, `ip_address` as `ipAddress`, `user_agent` as `userAgent`, `message`, `created_at` as `createdAt` FROM `login_logs` ORDER BY `id` DESC LIMIT 100",
+      );
+      return res.json(rows);
+    } catch (e) {
+      console.warn("MySQL select login_logs failed:", e);
+    }
+  }
+  res.json(memoryLoginLogs);
+});
+
+// 6D. Record System Change Endpoint (Untuk mencatat setiap interaksi UI ke data_changes MySQL)
+app.post("/api/changes/record", async (req, res) => {
+  const {
+    entityType,
+    entityId,
+    actionType,
+    userEmail,
+    description,
+    changesJson,
+  } = req.body;
+  await recordDataChange(
+    entityType || "SYSTEM",
+    entityId || "SYS",
+    actionType || "UPDATE",
+    userEmail || currentActiveSession?.email || "user@kemdikbud.go.id",
+    description || "Perubahan data sistem",
+    changesJson,
+  );
+  res.json({ success: true });
 });
 
 // 6. Users CRUD

@@ -38,10 +38,11 @@ export const DatabaseLaragonModal: React.FC<DatabaseLaragonModalProps> = ({
   onSuccessToast,
 }) => {
   const [activeTab, setActiveTab] = useState<
-    "status" | "tables" | "changes" | "guide"
+    "status" | "tables" | "login_logs" | "changes" | "guide"
   >("status");
   const [status, setStatus] = useState<DatabaseStatusResponse | null>(null);
   const [changes, setChanges] = useState<DataChangeLog[]>([]);
+  const [loginLogs, setLoginLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
@@ -57,12 +58,16 @@ export const DatabaseLaragonModal: React.FC<DatabaseLaragonModalProps> = ({
   const loadData = async () => {
     setLoading(true);
     try {
-      const [statusRes, changesRes] = await Promise.all([
+      const [statusRes, changesRes, logsRes] = await Promise.all([
         getDatabaseStatus(),
         getDataChangeLogs(),
+        fetch("/api/auth/login-logs")
+          .then((r) => (r.ok ? r.json() : []))
+          .catch(() => []),
       ]);
       setStatus(statusRes);
       setChanges(changesRes);
+      setLoginLogs(logsRes);
     } catch (e) {
       console.warn("Error loading DB modal info:", e);
     } finally {
@@ -180,6 +185,18 @@ export const DatabaseLaragonModal: React.FC<DatabaseLaragonModalProps> = ({
           >
             <Table className="w-4 h-4" />
             <span>Struktur Tabel MySQL</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("login_logs")}
+            className={`py-3 px-3.5 border-b-2 font-semibold transition-colors flex items-center space-x-2 cursor-pointer whitespace-nowrap ${
+              activeTab === "login_logs"
+                ? "border-blue-600 text-blue-700 bg-white"
+                : "border-transparent text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            <Key className="w-4 h-4" />
+            <span>Log Login MySQL ({loginLogs.length})</span>
           </button>
 
           <button
@@ -619,6 +636,93 @@ export const DatabaseLaragonModal: React.FC<DatabaseLaragonModalProps> = ({
                   </table>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* TAB: LOGIN LOGS MYSQL */}
+          {activeTab === "login_logs" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-xs text-slate-600 bg-white p-3 rounded-xl border border-slate-200">
+                <div>
+                  <span className="font-semibold text-slate-800">
+                    Catatan Log Autentikasi & Akses Masuk MySQL
+                  </span>
+                  <p className="text-[11px] text-slate-500">
+                    Setiap aktivasi kata sandi, keberhasilan login, percobaan
+                    gagal, dan logout tersimpan persisten pada tabel{" "}
+                    <code className="font-mono text-blue-600">login_logs</code>.
+                  </p>
+                </div>
+                <button
+                  onClick={loadData}
+                  className="flex items-center space-x-1 px-2.5 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-medium cursor-pointer"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  <span>Muat Ulang</span>
+                </button>
+              </div>
+
+              {loginLogs.length === 0 ? (
+                <div className="text-center py-10 bg-white rounded-xl border border-slate-200 text-slate-400 text-xs">
+                  Belum ada log aktivitas login di MySQL.
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+                  {loginLogs.map((log) => {
+                    const isSuccess = log.status === "SUCCESS";
+                    const isRegister = log.status === "REGISTER_PASSWORD";
+                    const isLogout = log.status === "LOGOUT";
+                    const isFailed =
+                      log.status.startsWith("FAILED") ||
+                      log.status.includes("DENIED");
+
+                    return (
+                      <div
+                        key={log.id}
+                        className="bg-white p-3 rounded-xl border border-slate-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:border-slate-300 transition-colors"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center space-x-2">
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                isSuccess
+                                  ? "bg-emerald-100 text-emerald-800"
+                                  : isRegister
+                                    ? "bg-teal-100 text-teal-800"
+                                    : isLogout
+                                      ? "bg-slate-100 text-slate-700"
+                                      : isFailed
+                                        ? "bg-rose-100 text-rose-800"
+                                        : "bg-amber-100 text-amber-800"
+                              }`}
+                            >
+                              {log.status}
+                            </span>
+                            <span className="text-slate-800 font-medium">
+                              {log.message}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-500 flex items-center space-x-3">
+                            <span>
+                              Akun:{" "}
+                              <strong className="text-slate-700">
+                                {log.userEmail}
+                              </strong>
+                            </span>
+                            <span>•</span>
+                            <span className="font-mono text-[10px]">
+                              IP: {log.ipAddress || "127.0.0.1"}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="text-[10px] font-mono text-slate-400 self-end sm:self-center shrink-0">
+                          {new Date(log.createdAt).toLocaleString("id-ID")}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 

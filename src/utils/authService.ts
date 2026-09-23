@@ -361,6 +361,19 @@ export const getStoredAccount = (): UserAccount => {
   return DEFAULT_USER_ACCOUNT;
 };
 
+export const getStoredActiveUser = (): UserAccount | null => {
+  try {
+    const raw = localStorage.getItem(STORAGE_ACCOUNT_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.email) {
+        return parsed;
+      }
+    }
+  } catch (e) {}
+  return null;
+};
+
 export const saveUserAccount = (account: UserAccount): void => {
   const cleanEmail = account.email.trim().toLowerCase();
   const normalized: UserAccount = {
@@ -745,8 +758,87 @@ export const checkIsAuthenticated = (): boolean => {
   return localStorage.getItem(STORAGE_SESSION_KEY) === "true";
 };
 
+export const getCurrentSessionFromBackend = async (): Promise<{
+  isAuthenticated: boolean;
+  user?: UserAccount | null;
+}> => {
+  try {
+    const res = await fetch("/api/auth/current-session");
+    if (res.ok) {
+      const data = await res.json();
+      if (data.isAuthenticated && data.user) {
+        const userAccount: UserAccount = {
+          email: data.user.email,
+          password: "",
+          fullName: data.user.fullName,
+          nip: data.user.nip || "-",
+          roleTitle: data.user.roleTitle || "Pegawai GTK",
+          updatedAt: data.user.loginTime || new Date().toISOString(),
+        };
+        localStorage.setItem(STORAGE_SESSION_KEY, "true");
+        localStorage.setItem(STORAGE_ACCOUNT_KEY, JSON.stringify(userAccount));
+        return { isAuthenticated: true, user: userAccount };
+      }
+    }
+  } catch (err) {
+    console.warn("Gagal memverifikasi sesi backend MySQL:", err);
+  }
+  return {
+    isAuthenticated: checkIsAuthenticated(),
+    user: getStoredActiveUser(),
+  };
+};
+
 export const logoutSession = (): void => {
   localStorage.removeItem(STORAGE_SESSION_KEY);
+  localStorage.removeItem(STORAGE_ACCOUNT_KEY);
+  // Call MySQL logout API
+  fetch("/api/auth/logout", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: getStoredActiveUser()?.email || "unknown" }),
+  }).catch(() => {});
+};
+
+export const logoutSessionAsync = async (): Promise<void> => {
+  const activeUser = getStoredActiveUser();
+  try {
+    await fetch("/api/auth/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: activeUser?.email || "unknown" }),
+    });
+  } catch (e) {
+    console.warn("Gagal memanggil endpoint logout MySQL:", e);
+  }
+  localStorage.removeItem(STORAGE_SESSION_KEY);
+  localStorage.removeItem(STORAGE_ACCOUNT_KEY);
+};
+
+export const recordSystemChangeAsync = async (
+  entityType: string,
+  entityId: string,
+  actionType: string,
+  userEmail: string,
+  description: string,
+  changesJson?: any,
+): Promise<void> => {
+  try {
+    await fetch("/api/changes/record", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        entityType,
+        entityId,
+        actionType,
+        userEmail,
+        description,
+        changesJson,
+      }),
+    });
+  } catch (err) {
+    console.warn("Gagal mencatat perubahan ke MySQL data_changes:", err);
+  }
 };
 
 export const resetLockState = (): void => {

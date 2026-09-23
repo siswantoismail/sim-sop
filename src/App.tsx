@@ -15,10 +15,20 @@ import {
   INITIAL_USERS,
   INITIAL_BAGAN_ALIR_STEPS,
 } from "./data/initialData";
-import { SopDocument, UserProfile, BaganAlirStep } from "./types";
+import { SopDocument, UserProfile, UserRole, BaganAlirStep } from "./types";
 import { Building2, HelpCircle, ShieldCheck, FileText } from "lucide-react";
-import { checkIsAuthenticated, logoutSession } from "./utils/authService";
-import { getAllSopDocuments, initDatabase } from "./utils/database";
+import {
+  checkIsAuthenticated,
+  getCurrentSessionFromBackend,
+  logoutSessionAsync,
+  recordSystemChangeAsync,
+  getStoredActiveUser,
+} from "./utils/authService";
+import {
+  getAllSopDocuments,
+  saveSopDocument,
+  initDatabase,
+} from "./utils/database";
 
 export default function App() {
   // Authentication State: website strictly protected, blocked unless authenticated
@@ -26,7 +36,7 @@ export default function App() {
     checkIsAuthenticated(),
   );
 
-  // App States
+  // App States - Loaded from MySQL Database
   const [sopDocument, setSopDocument] =
     useState<SopDocument>(INITIAL_SOP_DOCUMENT);
   const [users, setUsers] = useState<UserProfile[]>(INITIAL_USERS);
@@ -44,17 +54,82 @@ export default function App() {
   const [isDbLaragonModalOpen, setIsDbLaragonModalOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
-  // Load SOP Documents from persistent Database on mount
+  // Function to load registered users directly from MySQL `users` table
+  const loadUsersFromMySQL = async () => {
+    try {
+      const res = await fetch("/api/auth/users");
+      if (res.ok) {
+        const dbUsers = await res.json();
+        if (Array.isArray(dbUsers) && dbUsers.length > 0) {
+          const mappedUsers: UserProfile[] = dbUsers.map(
+            (u: any, idx: number) => {
+              const roleTitle =
+                u.roleTitle || u.role_title || "Pelaksana POS AP";
+              let role: UserRole = "operator";
+              if (roleTitle.toLowerCase().includes("kepala"))
+                role = "kepala_kantor";
+              else if (roleTitle.toLowerCase().includes("admin"))
+                role = "super_admin";
+              else if (roleTitle.toLowerCase().includes("verifikator"))
+                role = "verifikator";
+              else if (
+                roleTitle.toLowerCase().includes("auditor") ||
+                roleTitle.toLowerCase().includes("mutu")
+              )
+                role = "auditor";
+
+              return {
+                id: `usr-${idx + 1}`,
+                name: u.fullName || u.full_name || "Pegawai GTK",
+                nip: u.nip || "-",
+                role,
+                roleTitle,
+                unit: "Kantor GTK Provinsi Gorontalo",
+                email: u.email,
+                avatarColor: idx % 2 === 0 ? "bg-blue-600" : "bg-emerald-600",
+              };
+            },
+          );
+          setUsers(mappedUsers);
+
+          // Synchronize currentUser with active session or first user
+          const active = getStoredActiveUser();
+          if (active) {
+            const match = mappedUsers.find(
+              (u) => u.email.toLowerCase() === active.email.toLowerCase(),
+            );
+            if (match) {
+              setCurrentUser(match);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("Gagal memuat pengguna dari MySQL:", e);
+    }
+  };
+
+  // Load SOP Documents and Users from MySQL Database on mount & verify session
   useEffect(() => {
     const initializeAndLoad = async () => {
       try {
+        // 1. Verifikasi status sesi aktif dari backend MySQL
+        const sessionInfo = await getCurrentSessionFromBackend();
+        if (sessionInfo.isAuthenticated) {
+          setIsAuthenticated(true);
+        }
+
+        // 2. Ambil pengguna terdaftar dari tabel `users` MySQL
+        await loadUsersFromMySQL();
+
+        // 3. Ambil naskah POS AP dari tabel `sop_documents` MySQL
         await initDatabase();
         const docs = await getAllSopDocuments();
         if (docs.length > 0) {
           setSopDocument(docs[0]);
         }
       } catch (err) {
-        console.warn("Failed to load initial docs from database:", err);
+        console.warn("Failed to load initial data from MySQL database:", err);
       }
     };
     initializeAndLoad();
@@ -77,13 +152,13 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  const handleLogout = () => {
-    logoutSession();
+  const handleLogout = async () => {
+    await logoutSessionAsync();
     setIsAuthenticated(false);
     addToast(
       "info",
       "Sesi Berakhir",
-      "Anda telah berhasil keluar dari sistem aplikasi.",
+      "Anda telah berhasil keluar dari sistem aplikasi dan dicatat di MySQL.",
     );
   };
 
@@ -92,8 +167,13 @@ export default function App() {
     return (
       <>
         <LoginView
-          onLoginSuccess={() => {
+          onLoginSuccess={async () => {
             setIsAuthenticated(true);
+            await loadUsersFromMySQL();
+            const docs = await getAllSopDocuments();
+            if (docs.length > 0) {
+              setSopDocument(docs[0]);
+            }
             addToast(
               "success",
               "Autentikasi Berhasil",
@@ -106,14 +186,27 @@ export default function App() {
     );
   }
 
-  // Update SOP Document
-  const handleUpdateSop = (updatedSop: SopDocument) => {
+  // Update SOP Document & Persist to MySQL
+  const handleUpdateSop = async (updatedSop: SopDocument) => {
     setSopDocument(updatedSop);
-    addToast(
-      "success",
-      "Database Diperbarui",
-      `Naskah ${updatedSop.nomorPos} tersimpan di database.`,
-    );
+    try {
+      await saveSopDocument(updatedSop);
+      await recordSystemChangeAsync(
+        "SOP_DOCUMENT",
+        updatedSop.id,
+        "UPDATE",
+        currentUser.email,
+        `Pembaruan naskah POS AP ${updatedSop.nomorPos} tersimpan di MySQL`,
+        { nomorPos: updatedSop.nomorPos, namaPos: updatedSop.namaPos },
+      );
+      addToast(
+        "success",
+        "Database MySQL Diperbarui",
+        `Naskah ${updatedSop.nomorPos} tersimpan secara persisten.`,
+      );
+    } catch (e) {
+      addToast("warning", "Penyimpanan Lokal", `Naskah tersimpan sementara.`);
+    }
   };
 
   return (
@@ -124,6 +217,13 @@ export default function App() {
         allUsers={users}
         onSelectUser={(u) => {
           setCurrentUser(u);
+          recordSystemChangeAsync(
+            "USER_SESSION",
+            u.email,
+            "SWITCH_ROLE",
+            u.email,
+            `Beralih peran aktif menjadi ${u.name} (${u.roleTitle})`,
+          );
           addToast(
             "info",
             "Sesi Pengguna Berubah",
@@ -173,6 +273,33 @@ export default function App() {
                   <strong>Bagan Alir Operasional</strong> sesuai standar
                   PermenPAN-RB No. 35/2012.
                 </p>
+              </div>
+            </div>
+
+            <div className="flex items-start space-x-3">
+              <div className="p-2 bg-emerald-100 text-emerald-700 rounded-xl shrink-0 mt-0.5">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center space-x-2">
+                  <h4 className="font-bold text-slate-900">
+                    Database MySQL Laragon
+                  </h4>
+                  <span className="text-[10px] bg-emerald-100 text-emerald-800 font-semibold px-1.5 py-0.2 rounded">
+                    Express.js
+                  </span>
+                </div>
+                <p className="text-slate-500 mt-0.5 leading-relaxed text-xs">
+                  Data login, naskah POS AP, dan catatan perubahan data
+                  tersimpan di MySQL Laragon via REST API Express.js (Node.js
+                  murni, tanpa PHP).
+                </p>
+                <button
+                  onClick={() => setIsDbLaragonModalOpen(true)}
+                  className="mt-2 text-xs font-semibold text-emerald-700 hover:text-emerald-800 underline flex items-center space-x-1 cursor-pointer"
+                >
+                  <span>Kelola Database &amp; Riwayat Perubahan &rarr;</span>
+                </button>
               </div>
             </div>
 
@@ -232,6 +359,13 @@ export default function App() {
         currentUser={currentUser}
         onSelectUser={(u) => {
           setCurrentUser(u);
+          recordSystemChangeAsync(
+            "USER_SESSION",
+            u.email,
+            "SWITCH_ROLE",
+            u.email,
+            `Beralih peran aktif menjadi ${u.name} (${u.roleTitle})`,
+          );
           addToast(
             "info",
             "Sesi Pengguna Berubah",

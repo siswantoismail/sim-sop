@@ -495,7 +495,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                           isLocked || isPermanentLock || isSubmittingLogin
                         }
                         onChange={(e) => setEmail(e.target.value)}
-                        placeholder="admin@gmail.com / admin.gtk@kemdikbud.go.id"
+                        placeholder="siswantoismail173@gmail.com / admin.gtk@kemdikbud.go.id"
                         className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 text-xs sm:text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition disabled:bg-slate-100 disabled:cursor-not-allowed text-slate-900"
                         required
                       />
@@ -542,6 +542,29 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                         )}
                       </button>
                     </div>
+                  </div>
+
+                  {/* Security Rules Brief */}
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-[11px] text-slate-600 space-y-1">
+                    <div className="font-bold text-slate-800 flex items-center space-x-1.5">
+                      <ShieldAlert className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Aturan Keamanan Pembatasan Akses:</span>
+                    </div>
+                    <ul className="list-disc list-outside pl-4 space-y-0.5 leading-snug">
+                      <li>
+                        Hanya alamat email yang telah ditentukan Administrator
+                        yang memiliki izin login.
+                      </li>
+                      <li>
+                        Pengguna baru wajib mendaftarkan kata sandi terlebih
+                        dahulu di tab <strong>Daftar Akun</strong>.
+                      </li>
+                      <li>
+                        Salah 3 kali berturut-turut &rarr; Dibekukan{" "}
+                        <strong>1 menit</strong>. Jika masih salah &rarr;{" "}
+                        <strong>Blokir Permanen</strong>.
+                      </li>
+                    </ul>
                   </div>
 
                   {/* Submit Button */}
@@ -604,6 +627,43 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                 </div>
 
                 {/* Helper Card for Default Credentials */}
+                {!isPermanentLock && (
+                  <div className="mt-5 pt-4 border-t border-slate-100">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-slate-600 flex items-center space-x-1">
+                        <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                        <span>Kredensial Bawaan Teruji</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleAutofillDefault}
+                        disabled={isLocked}
+                        className="text-[11px] text-blue-600 hover:text-blue-800 font-bold hover:underline disabled:opacity-40 cursor-pointer"
+                      >
+                        Isi Otomatis
+                      </button>
+                    </div>
+                    <div className="mt-2 bg-blue-50/70 border border-blue-200 rounded-lg p-2.5 text-[11px] text-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                      <div>
+                        <div>
+                          Email:{" "}
+                          <strong className="text-blue-900">
+                            {currentAccount.email}
+                          </strong>
+                        </div>
+                        <div>
+                          Kata Sandi:{" "}
+                          <strong className="text-blue-900">
+                            {currentAccount.password}
+                          </strong>
+                        </div>
+                      </div>
+                      <span className="text-[10px] text-slate-500 italic">
+                        (Tersimpan di MySQL users)
+                      </span>
+                    </div>
+                  </div>
+                )}
               </>
             )}
 
@@ -836,13 +896,13 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                   {/* Tombol Simpan / Daftarkan Kata Sandi */}
                   <button
                     type="submit"
-                    disabled={
+                    disabled={Boolean(
                       isSubmittingRegister ||
                       !regEmail ||
                       !regPassword ||
                       !isPasswordsMatch ||
-                      (whitelistStatus && !whitelistStatus.isAuthorized)
-                    }
+                      (whitelistStatus && !whitelistStatus.isAuthorized),
+                    )}
                     className="w-full py-2.5 px-4 rounded-xl text-white font-bold text-xs sm:text-sm shadow-md transition flex items-center justify-center space-x-2 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-800 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isSubmittingRegister ? (
@@ -877,6 +937,96 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                 </div>
               </>
             )}
+
+            {/* COLLAPSIBLE WHITELIST PREVIEW:
+                Menampilkan daftar email yang telah ditentukan untuk memudahkan pengguna menguji & melihat pembatasan akses */}
+            <div className="mt-6 pt-4 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() =>
+                  setShowWhitelistReference(!showWhitelistReference)
+                }
+                className="w-full flex items-center justify-between p-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold transition cursor-pointer border border-slate-200/80"
+              >
+                <div className="flex items-center space-x-2">
+                  <Shield className="w-4 h-4 text-blue-600" />
+                  <span>
+                    Daftar Email yang Diizinkan (Whitelist Akses Terdaftar)
+                  </span>
+                  <span className="px-2 py-0.5 text-[10px] rounded-full bg-blue-100 text-blue-800 font-black">
+                    {authorizedList.length || DEFAULT_AUTHORIZED_EMAILS.length}{" "}
+                    Akun
+                  </span>
+                </div>
+                {showWhitelistReference ? (
+                  <ChevronUp className="w-4 h-4 text-slate-500" />
+                ) : (
+                  <ChevronDown className="w-4 h-4 text-slate-500" />
+                )}
+              </button>
+
+              {showWhitelistReference && (
+                <div className="mt-2.5 p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-xs animate-in fade-in duration-200">
+                  <div className="text-[11px] text-slate-600 leading-relaxed">
+                    Hanya email dinas di bawah ini yang disetujui untuk
+                    mendaftarkan kata sandi dan mengakses sistem SIM-SOP GTK
+                    Provinsi Gorontalo:
+                  </div>
+
+                  <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                    {(authorizedList.length > 0
+                      ? authorizedList
+                      : DEFAULT_AUTHORIZED_EMAILS
+                    ).map((item, idx) => (
+                      <div
+                        key={idx}
+                        className="bg-white p-2.5 rounded-lg border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs"
+                      >
+                        <div className="space-y-0.5">
+                          <div className="font-bold text-slate-900 flex items-center space-x-1.5">
+                            <span className="text-blue-900">{item.email}</span>
+                            {item.isRegistered ? (
+                              <span className="px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 text-[9px] font-bold">
+                                Aktif
+                              </span>
+                            ) : (
+                              <span className="px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 text-[9px] font-bold">
+                                Siap Aktivasi
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-600">
+                            {item.fullName} &bull;{" "}
+                            <span className="text-slate-500">
+                              {item.roleTitle}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 font-mono">
+                            NIP: {item.nip}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleSelectAuthorizedEmail(item.email)
+                          }
+                          className="self-start sm:self-center px-2.5 py-1 rounded-md bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white text-[11px] font-bold transition border border-blue-200 cursor-pointer"
+                        >
+                          Gunakan Email
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="text-[10px] text-slate-500 italic pt-1">
+                    Catatan: Pembatasan akses tersimpan di tabel MySQL{" "}
+                    <code>authorized_emails</code> dan dieksekusi secara ketat
+                    oleh backend Express.js.
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
