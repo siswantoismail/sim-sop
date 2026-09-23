@@ -29,6 +29,7 @@ import {
   saveSopDocument,
   initDatabase,
 } from "./utils/database";
+import { apiUrl } from "./utils/apiConfig";
 
 export default function App() {
   // Authentication State: website strictly protected, blocked unless authenticated
@@ -57,7 +58,7 @@ export default function App() {
   // Function to load registered users directly from MySQL `users` table
   const loadUsersFromMySQL = async () => {
     try {
-      const res = await fetch("/api/auth/users");
+      const res = await fetch(apiUrl("/api/auth/users"));
       if (res.ok) {
         const dbUsers = await res.json();
         if (Array.isArray(dbUsers) && dbUsers.length > 0) {

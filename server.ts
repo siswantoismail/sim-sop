@@ -3,25 +3,104 @@ import path from "path";
 import fs from "fs";
 import mysql from "mysql2/promise";
 import dotenv from "dotenv";
+import cors from "cors";
 import { createServer as createViteServer } from "vite";
 
 dotenv.config();
 
-const PORT = 3000;
+// Port dynamic detection for Railway (PORT) or local 3000
+const PORT = Number(process.env.PORT) || 3000;
 const app = express();
 
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true }));
+// MySQL Configuration (Railway / Cloud / Laragon)
+// Supports Railway MYSQL_URL, DATABASE_URL, or individual MYSQLHOST/MYSQLPORT vars
+const MYSQL_URL = process.env.MYSQL_URL || process.env.DATABASE_URL || "";
 
-// MySQL Laragon Configuration
 const MYSQL_CONFIG = {
-  host: process.env.MYSQL_HOST || "localhost",
-  port: Number(process.env.MYSQL_PORT) || 3306,
-  user: process.env.MYSQL_USER || "root",
-  password: process.env.MYSQL_PASSWORD || "",
-  database: process.env.MYSQL_DATABASE || "sim_sop_gtk",
-  connectTimeout: 2500,
+  host:
+    process.env.MYSQLHOST ||
+    process.env.MYSQL_HOST ||
+    process.env.DB_HOST ||
+    "localhost",
+  port:
+    Number(
+      process.env.MYSQLPORT || process.env.MYSQL_PORT || process.env.DB_PORT,
+    ) || 3306,
+  user:
+    process.env.MYSQLUSER ||
+    process.env.MYSQL_USER ||
+    process.env.DB_USER ||
+    "root",
+  password:
+    process.env.MYSQLPASSWORD ||
+    process.env.MYSQL_PASSWORD ||
+    process.env.DB_PASSWORD ||
+    "",
+  database:
+    process.env.MYSQLDATABASE ||
+    process.env.MYSQL_DATABASE ||
+    process.env.DB_NAME ||
+    "sim_sop_gtk",
+  connectTimeout: 5000,
 };
+
+const isRailway = Boolean(
+  process.env.RAILWAY_ENVIRONMENT ||
+  process.env.RAILWAY_PROJECT_ID ||
+  MYSQL_URL ||
+  process.env.MYSQLHOST,
+);
+
+const isRemoteDb = Boolean(
+  MYSQL_URL ||
+  (MYSQL_CONFIG.host !== "localhost" && MYSQL_CONFIG.host !== "127.0.0.1"),
+);
+
+// CORS Middleware for Vercel Frontend & external client connections
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Permissive for Vercel (*.vercel.app), localhost, custom domains, or server-to-server
+      callback(null, true);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "x-user-email",
+      "x-requested-with",
+      "Accept",
+      "Origin",
+    ],
+  }),
+);
+
+app.use(express.json({ limit: "15mb" }));
+app.use(express.urlencoded({ extended: true, limit: "15mb" }));
+
+// Healthcheck endpoints for Railway Deployment Monitoring
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    database: isMySqlConnected ? "connected" : "connecting",
+    environment: process.env.NODE_ENV || "development",
+    platform: isRailway ? "Railway" : "Express.js Node",
+  });
+});
+
+app.get("/api/health", (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    database: isMySqlConnected ? "connected" : "connecting",
+    environment: process.env.NODE_ENV || "development",
+    platform: isRailway ? "Railway" : "Express.js Node",
+  });
+});
 
 // Initial Seed Data for fallback and table population
 const DEFAULT_USERS = [
@@ -213,29 +292,68 @@ let mySqlLastError: string | null = null;
 // Initialize MySQL Connection & Schema
 async function initMySqlConnection(): Promise<boolean> {
   try {
-    // 1. First test connection to MySQL server (without specifying DB, so we can CREATE DATABASE if missing)
-    const serverConnection = await mysql.createConnection({
-      host: MYSQL_CONFIG.host,
-      port: MYSQL_CONFIG.port,
-      user: MYSQL_CONFIG.user,
-      password: MYSQL_CONFIG.password,
-      connectTimeout: MYSQL_CONFIG.connectTimeout,
-    });
+    // 1. For local development (Laragon), ensure database exists
+    if (
+      !MYSQL_URL &&
+      (MYSQL_CONFIG.host === "localhost" || MYSQL_CONFIG.host === "127.0.0.1")
+    ) {
+      try {
+        const serverConnection = await mysql.createConnection({
+          host: MYSQL_CONFIG.host,
+          port: MYSQL_CONFIG.port,
+          user: MYSQL_CONFIG.user,
+          password: MYSQL_CONFIG.password,
+          connectTimeout: 3000,
+        });
 
-    await serverConnection.query(
-      `CREATE DATABASE IF NOT EXISTS \`${MYSQL_CONFIG.database}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`,
-    );
-    await serverConnection.end();
+        await serverConnection.query(
+          `CREATE DATABASE IF NOT EXISTS \`${MYSQL_CONFIG.database}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`,
+        );
+        await serverConnection.end();
+      } catch (localDbErr) {
+        console.warn("[DB] Laragon auto-create DB info:", localDbErr);
+      }
+    }
 
-    // 2. Create Pool connecting directly to sim_sop_gtk
-    dbPool = mysql.createPool({
-      ...MYSQL_CONFIG,
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0,
-    });
+    // 2. Create Pool connecting to database (Railway MYSQL_URL or MYSQL_CONFIG)
+    if (MYSQL_URL) {
+      console.log(
+        "[DB] Connecting to MySQL using Railway MYSQL_URL / DATABASE_URL...",
+      );
+      dbPool = mysql.createPool({
+        uri: MYSQL_URL,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+        connectTimeout: 8000,
+        ssl:
+          process.env.MYSQL_SSL === "false"
+            ? undefined
+            : { rejectUnauthorized: false },
+      });
+    } else {
+      console.log(
+        `[DB] Connecting to MySQL host=${MYSQL_CONFIG.host}:${MYSQL_CONFIG.port} database=${MYSQL_CONFIG.database}...`,
+      );
+      dbPool = mysql.createPool({
+        ...MYSQL_CONFIG,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+        connectTimeout: 8000,
+        ssl:
+          isRemoteDb && process.env.MYSQL_SSL !== "false"
+            ? { rejectUnauthorized: false }
+            : undefined,
+      });
+    }
 
-    // 3. Create Tables
+    // 3. Test ping to ensure connection is live
+    const testConn = await dbPool.getConnection();
+    await testConn.ping();
+    testConn.release();
+
+    // 4. Create Tables if they don't exist
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS \`users\` (
         \`id\` INT AUTO_INCREMENT PRIMARY KEY,
@@ -834,11 +952,9 @@ app.post("/api/auth/authorized-emails", async (req, res) => {
         ],
       );
     } catch (err: any) {
-      return res
-        .status(400)
-        .json({
-          error: "Email sudah terdaftar dalam whitelist: " + err.message,
-        });
+      return res.status(400).json({
+        error: "Email sudah terdaftar dalam whitelist: " + err.message,
+      });
     }
   }
 
@@ -1540,11 +1656,18 @@ app.get("/api/changes", async (req, res) => {
 });
 
 // ==========================================
-// START SERVER WITH VITE MIDDLEWARE
+// START SERVER WITH VITE MIDDLEWARE / PRODUCTION
 // ==========================================
 async function startServer() {
-  // Attempt initial MySQL Laragon connect
+  // Attempt initial MySQL connect
   initMySqlConnection().catch(() => {});
+
+  // Periodic reconnect retry for cloud container lifecycle (Railway)
+  setInterval(async () => {
+    if (!isMySqlConnected) {
+      await initMySqlConnection().catch(() => {});
+    }
+  }, 12000);
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -1554,18 +1677,44 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
+    const indexHtmlPath = path.join(distPath, "index.html");
+
+    if (fs.existsSync(indexHtmlPath)) {
+      app.use(express.static(distPath));
+      app.get("*", (req, res) => {
+        res.sendFile(indexHtmlPath);
+      });
+    } else {
+      // Standalone backend mode on Railway
+      app.get("/", (req, res) => {
+        res.status(200).json({
+          name: "SIM-SOP GTK Gorontalo - Backend API",
+          status: "online",
+          platform: isRailway ? "Railway" : "Node.js Express",
+          database: isMySqlConnected ? "connected" : "connecting",
+          targetDb: MYSQL_URL
+            ? "Railway MySQL (MYSQL_URL)"
+            : `${MYSQL_CONFIG.host}:${MYSQL_CONFIG.port}/${MYSQL_CONFIG.database}`,
+          endpoints: {
+            health: "/api/health",
+            dbStatus: "/api/database/status",
+            login: "POST /api/auth/login",
+            register: "POST /api/auth/register-password",
+            whitelist: "GET /api/auth/check-whitelist/:email",
+            sop: "GET /api/sop",
+          },
+        });
+      });
+    }
   }
 
   app.listen(PORT, "0.0.0.0", () => {
+    console.log(`[Express Backend] Server listening on http://0.0.0.0:${PORT}`);
     console.log(
-      `[Express Backend] Server berjalan di http://0.0.0.0:${PORT} (Express.js, Tanpa PHP)`,
+      `[Deployment Mode] ${isRailway ? "Railway Cloud Service" : "Local Development"}`,
     );
     console.log(
-      `[Target DB] MySQL Laragon host=${MYSQL_CONFIG.host} port=${MYSQL_CONFIG.port} db=${MYSQL_CONFIG.database}`,
+      `[Database Target] ${MYSQL_URL ? "Railway MYSQL_URL" : `${MYSQL_CONFIG.host}:${MYSQL_CONFIG.port}/${MYSQL_CONFIG.database}`}`,
     );
   });
 }

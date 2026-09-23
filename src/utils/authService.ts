@@ -1,4 +1,5 @@
 import { AuthorizedEmail, WhitelistCheckResult } from "../types";
+import { apiUrl } from "./apiConfig";
 
 export interface AuthLockState {
   failedAttempts: number;
@@ -179,7 +180,7 @@ export const saveAuthorizedEmails = (list: AuthorizedEmail[]): void => {
 
 export const fetchAuthorizedEmails = async (): Promise<AuthorizedEmail[]> => {
   try {
-    const res = await fetch("/api/auth/authorized-emails");
+    const res = await fetch(apiUrl("/api/auth/authorized-emails"));
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) {
@@ -208,7 +209,7 @@ export const checkEmailWhitelist = async (
   // 1. Coba verifikasi langsung ke server Express / MySQL
   try {
     const res = await fetch(
-      `/api/auth/check-whitelist/${encodeURIComponent(cleanEmail)}`,
+      apiUrl(`/api/auth/check-whitelist/${encodeURIComponent(cleanEmail)}`),
     );
     if (res.ok) {
       const data: WhitelistCheckResult = await res.json();
@@ -255,7 +256,7 @@ export const registerPasswordForAuthorizedEmail = async (
 
   // Panggil endpoint Express / MySQL
   try {
-    const res = await fetch("/api/auth/register-password", {
+    const res = await fetch(apiUrl("/api/auth/register-password"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: cleanEmail, password }),
@@ -526,7 +527,7 @@ export const performLoginAsync = async (
 
   // 1. Coba login melalui API Backend Express & MySQL Laragon
   try {
-    const res = await fetch("/api/auth/login", {
+    const res = await fetch(apiUrl("/api/auth/login"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: cleanEmail, password: cleanPassword }),
@@ -763,7 +764,7 @@ export const getCurrentSessionFromBackend = async (): Promise<{
   user?: UserAccount | null;
 }> => {
   try {
-    const res = await fetch("/api/auth/current-session");
+    const res = await fetch(apiUrl("/api/auth/current-session"));
     if (res.ok) {
       const data = await res.json();
       if (data.isAuthenticated && data.user) {
@@ -793,7 +794,7 @@ export const logoutSession = (): void => {
   localStorage.removeItem(STORAGE_SESSION_KEY);
   localStorage.removeItem(STORAGE_ACCOUNT_KEY);
   // Call MySQL logout API
-  fetch("/api/auth/logout", {
+  fetch(apiUrl("/api/auth/logout"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email: getStoredActiveUser()?.email || "unknown" }),
@@ -803,7 +804,7 @@ export const logoutSession = (): void => {
 export const logoutSessionAsync = async (): Promise<void> => {
   const activeUser = getStoredActiveUser();
   try {
-    await fetch("/api/auth/logout", {
+    await fetch(apiUrl("/api/auth/logout"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: activeUser?.email || "unknown" }),
@@ -824,7 +825,7 @@ export const recordSystemChangeAsync = async (
   changesJson?: any,
 ): Promise<void> => {
   try {
-    await fetch("/api/changes/record", {
+    await fetch(apiUrl("/api/changes/record"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

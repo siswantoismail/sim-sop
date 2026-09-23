@@ -25,6 +25,7 @@ import {
   DatabaseStatusResponse,
   DataChangeLog,
 } from "../utils/database";
+import { apiUrl } from "../utils/apiConfig";
 
 interface DatabaseLaragonModalProps {
   isOpen: boolean;
@@ -61,7 +62,7 @@ export const DatabaseLaragonModal: React.FC<DatabaseLaragonModalProps> = ({
       const [statusRes, changesRes, logsRes] = await Promise.all([
         getDatabaseStatus(),
         getDataChangeLogs(),
-        fetch("/api/auth/login-logs")
+        fetch(apiUrl("/api/auth/login-logs"))
           .then((r) => (r.ok ? r.json() : []))
           .catch(() => []),
       ]);
@@ -77,7 +78,7 @@ export const DatabaseLaragonModal: React.FC<DatabaseLaragonModalProps> = ({
 
   const loadSql = async () => {
     try {
-      const res = await fetch("/api/database/schema-sql");
+      const res = await fetch(apiUrl("/api/database/schema-sql"));
       if (res.ok) {
         const text = await res.text();
         setRawSql(text);

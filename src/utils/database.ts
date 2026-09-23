@@ -6,18 +6,19 @@
 // 3. data_changes (MySQL `data_changes` audit logs table)
 // With automatic offline/IndexedDB resilience
 
-import { SopDocument } from '../types';
-import { INITIAL_SOP_DOCUMENT } from '../data/initialData';
-import { UserAccount, DEFAULT_USER_ACCOUNT } from './authService';
+import { SopDocument } from "../types";
+import { INITIAL_SOP_DOCUMENT } from "../data/initialData";
+import { UserAccount, DEFAULT_USER_ACCOUNT } from "./authService";
+import { apiUrl } from "./apiConfig";
 
-const DB_NAME = 'SIM_SOP_DATABASE_V1';
+const DB_NAME = "SIM_SOP_DATABASE_V1";
 const DB_VERSION = 1;
-const STORE_SOP = 'sop_documents';
-const STORE_USERS = 'users';
+const STORE_SOP = "sop_documents";
+const STORE_USERS = "users";
 
-const LS_SOP_KEY = 'sim_sop_db_documents';
-const LS_USERS_KEY = 'sim_sop_db_users';
-const LS_ACTIVE_SOP_ID = 'sim_sop_db_active_id';
+const LS_SOP_KEY = "sim_sop_db_documents";
+const LS_USERS_KEY = "sim_sop_db_users";
+const LS_ACTIVE_SOP_ID = "sim_sop_db_active_id";
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -25,8 +26,8 @@ function getIndexedDB(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
 
   dbPromise = new Promise((resolve, reject) => {
-    if (typeof window === 'undefined' || !window.indexedDB) {
-      return reject(new Error('IndexedDB not supported'));
+    if (typeof window === "undefined" || !window.indexedDB) {
+      return reject(new Error("IndexedDB not supported"));
     }
 
     const request = window.indexedDB.open(DB_NAME, DB_VERSION);
@@ -34,10 +35,10 @@ function getIndexedDB(): Promise<IDBDatabase> {
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
       if (!db.objectStoreNames.contains(STORE_SOP)) {
-        db.createObjectStore(STORE_SOP, { keyPath: 'id' });
+        db.createObjectStore(STORE_SOP, { keyPath: "id" });
       }
       if (!db.objectStoreNames.contains(STORE_USERS)) {
-        db.createObjectStore(STORE_USERS, { keyPath: 'email' });
+        db.createObjectStore(STORE_USERS, { keyPath: "email" });
       }
     };
 
@@ -59,8 +60,8 @@ function getIndexedDB(): Promise<IDBDatabase> {
 
 export async function getAllSopDocuments(): Promise<SopDocument[]> {
   try {
-    const res = await fetch('/api/sop', {
-      headers: { 'Accept': 'application/json' }
+    const res = await fetch(apiUrl("/api/sop"), {
+      headers: { Accept: "application/json" },
     });
     if (res.ok) {
       const data = await res.json();
@@ -71,7 +72,7 @@ export async function getAllSopDocuments(): Promise<SopDocument[]> {
       }
     }
   } catch (err) {
-    console.warn('[DB Client] Menggunakan cache lokal untuk naskah SOP:', err);
+    console.warn("[DB Client] Menggunakan cache lokal untuk naskah SOP:", err);
   }
 
   // Fallback to IndexedDB / localStorage
@@ -82,7 +83,7 @@ async function getLocalSopDocuments(): Promise<SopDocument[]> {
   try {
     const db = await getIndexedDB();
     return new Promise((resolve) => {
-      const tx = db.transaction(STORE_SOP, 'readonly');
+      const tx = db.transaction(STORE_SOP, "readonly");
       const store = tx.objectStore(STORE_SOP);
       const req = store.getAll();
       req.onsuccess = () => {
@@ -110,7 +111,7 @@ function getFallbackSopDocuments(): SopDocument[] {
       }
     }
   } catch (e) {
-    console.error('Error reading localStorage SOP documents', e);
+    console.error("Error reading localStorage SOP documents", e);
   }
   const defaultList = [INITIAL_SOP_DOCUMENT];
   localStorage.setItem(LS_SOP_KEY, JSON.stringify(defaultList));
@@ -120,17 +121,22 @@ function getFallbackSopDocuments(): SopDocument[] {
 function saveToLocalCache(docs: SopDocument[]) {
   try {
     localStorage.setItem(LS_SOP_KEY, JSON.stringify(docs));
-    getIndexDBStore(STORE_SOP, 'readwrite').then(store => {
-      for (const doc of docs) {
-        store.put(doc);
-      }
-    }).catch(() => {});
+    getIndexDBStore(STORE_SOP, "readwrite")
+      .then((store) => {
+        for (const doc of docs) {
+          store.put(doc);
+        }
+      })
+      .catch(() => {});
   } catch (e) {
     // ignore
   }
 }
 
-async function getIndexDBStore(storeName: string, mode: IDBTransactionMode): Promise<IDBObjectStore> {
+async function getIndexDBStore(
+  storeName: string,
+  mode: IDBTransactionMode,
+): Promise<IDBObjectStore> {
   const db = await getIndexedDB();
   const tx = db.transaction(storeName, mode);
   return tx.objectStore(storeName);
@@ -140,7 +146,7 @@ export async function getActiveSopDocument(): Promise<SopDocument> {
   const allDocs = await getAllSopDocuments();
   const activeId = localStorage.getItem(LS_ACTIVE_SOP_ID);
   if (activeId) {
-    const found = allDocs.find(d => d.id === activeId);
+    const found = allDocs.find((d) => d.id === activeId);
     if (found) return found;
   }
   return allDocs[0] || INITIAL_SOP_DOCUMENT;
@@ -150,22 +156,25 @@ export async function saveSopDocument(doc: SopDocument): Promise<void> {
   // 1. Send update to Express Server (writes to MySQL Laragon `sop_documents` & `data_changes`)
   try {
     const activeAccount = getStoredActiveUser();
-    await fetch(`/api/sop/${encodeURIComponent(doc.id)}`, {
-      method: 'PUT',
+    await fetch(apiUrl(`/api/sop/${encodeURIComponent(doc.id)}`), {
+      method: "PUT",
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-email': activeAccount?.email || 'operator@kemdikbud.go.id'
+        "Content-Type": "application/json",
+        "x-user-email": activeAccount?.email || "operator@kemdikbud.go.id",
       },
-      body: JSON.stringify(doc)
+      body: JSON.stringify(doc),
     });
   } catch (e) {
-    console.warn('[DB Client] Server API update error, tersimpan ke cache lokal:', e);
+    console.warn(
+      "[DB Client] Server API update error, tersimpan ke cache lokal:",
+      e,
+    );
   }
 
   // 2. Safeguard to LocalStorage & IndexedDB
   try {
     const current = getFallbackSopDocuments();
-    const idx = current.findIndex(d => d.id === doc.id);
+    const idx = current.findIndex((d) => d.id === doc.id);
     if (idx >= 0) {
       current[idx] = doc;
     } else {
@@ -174,47 +183,67 @@ export async function saveSopDocument(doc: SopDocument): Promise<void> {
     localStorage.setItem(LS_SOP_KEY, JSON.stringify(current));
     localStorage.setItem(LS_ACTIVE_SOP_ID, doc.id);
 
-    const store = await getIndexDBStore(STORE_SOP, 'readwrite');
+    const store = await getIndexDBStore(STORE_SOP, "readwrite");
     store.put(doc);
   } catch (e) {
-    console.warn('Local cache save failed', e);
+    console.warn("Local cache save failed", e);
   }
 }
 
-export async function createNewSopDocument(newDoc: Partial<SopDocument>): Promise<SopDocument> {
+export async function createNewSopDocument(
+  newDoc: Partial<SopDocument>,
+): Promise<SopDocument> {
   const id = `sop-${Date.now()}`;
   const completeDoc: SopDocument = {
     id,
-    nomorPos: newDoc.nomorPos || `${String(Date.now()).slice(-4)}/T/B7.33/OT.02.00/2026`,
-    namaPos: newDoc.namaPos || 'Naskah Prosedur Operasional Standar Baru',
+    nomorPos:
+      newDoc.nomorPos ||
+      `${String(Date.now()).slice(-4)}/T/B7.33/OT.02.00/2026`,
+    namaPos: newDoc.namaPos || "Naskah Prosedur Operasional Standar Baru",
     instansi: newDoc.instansi || INITIAL_SOP_DOCUMENT.instansi,
     unitKerja: newDoc.unitKerja || INITIAL_SOP_DOCUMENT.unitKerja,
-    tanggalPembuatan: newDoc.tanggalPembuatan || new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }),
-    tanggalRevisi: newDoc.tanggalRevisi || '',
-    tanggalEfektif: newDoc.tanggalEfektif || new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }),
-    disahkanOleh: newDoc.disahkanOleh || { ...INITIAL_SOP_DOCUMENT.disahkanOleh },
+    tanggalPembuatan:
+      newDoc.tanggalPembuatan ||
+      new Date().toLocaleDateString("id-ID", {
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+      }),
+    tanggalRevisi: newDoc.tanggalRevisi || "",
+    tanggalEfektif:
+      newDoc.tanggalEfektif ||
+      new Date().toLocaleDateString("id-ID", {
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+      }),
+    disahkanOleh: newDoc.disahkanOleh || {
+      ...INITIAL_SOP_DOCUMENT.disahkanOleh,
+    },
     dasarHukum: newDoc.dasarHukum || [...INITIAL_SOP_DOCUMENT.dasarHukum],
-    kualifikasiPelaksana: newDoc.kualifikasiPelaksana || [...INITIAL_SOP_DOCUMENT.kualifikasiPelaksana],
+    kualifikasiPelaksana: newDoc.kualifikasiPelaksana || [
+      ...INITIAL_SOP_DOCUMENT.kualifikasiPelaksana,
+    ],
     keterkaitan: newDoc.keterkaitan || [...INITIAL_SOP_DOCUMENT.keterkaitan],
     peralatan: newDoc.peralatan || [...INITIAL_SOP_DOCUMENT.peralatan],
     peringatan: newDoc.peringatan || [...INITIAL_SOP_DOCUMENT.peringatan],
     pencatatan: newDoc.pencatatan || [...INITIAL_SOP_DOCUMENT.pencatatan],
-    status: newDoc.status || 'Aktif'
+    status: newDoc.status || "Aktif",
   };
 
   // POST to Express / MySQL
   try {
     const activeAccount = getStoredActiveUser();
-    await fetch('/api/sop', {
-      method: 'POST',
+    await fetch(apiUrl("/api/sop"), {
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-email': activeAccount?.email || 'admin@kemdikbud.go.id'
+        "Content-Type": "application/json",
+        "x-user-email": activeAccount?.email || "admin@kemdikbud.go.id",
       },
-      body: JSON.stringify(completeDoc)
+      body: JSON.stringify(completeDoc),
     });
   } catch (err) {
-    console.warn('API POST SOP failed, cached locally:', err);
+    console.warn("API POST SOP failed, cached locally:", err);
   }
 
   // Update local cache
@@ -231,37 +260,39 @@ export async function deleteSopDocument(id: string): Promise<boolean> {
   // DELETE from Express / MySQL
   try {
     const activeAccount = getStoredActiveUser();
-    await fetch(`/api/sop/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
+    await fetch(apiUrl(`/api/sop/${encodeURIComponent(id)}`), {
+      method: "DELETE",
       headers: {
-        'x-user-email': activeAccount?.email || 'admin@kemdikbud.go.id'
-      }
+        "x-user-email": activeAccount?.email || "admin@kemdikbud.go.id",
+      },
     });
   } catch (err) {
-    console.warn('API DELETE SOP failed:', err);
+    console.warn("API DELETE SOP failed:", err);
   }
 
   // Remove from localStorage & IndexedDB
-  const filtered = current.filter(d => d.id !== id);
+  const filtered = current.filter((d) => d.id !== id);
   localStorage.setItem(LS_SOP_KEY, JSON.stringify(filtered));
   if (localStorage.getItem(LS_ACTIVE_SOP_ID) === id) {
     localStorage.setItem(LS_ACTIVE_SOP_ID, filtered[0].id);
   }
 
   try {
-    const store = await getIndexDBStore(STORE_SOP, 'readwrite');
+    const store = await getIndexDBStore(STORE_SOP, "readwrite");
     store.delete(id);
   } catch (e) {
-    console.warn('IndexedDB delete failed', e);
+    console.warn("IndexedDB delete failed", e);
   }
 
   return true;
 }
 
-export async function resetSopDocumentToDefault(id: string): Promise<SopDocument> {
+export async function resetSopDocumentToDefault(
+  id: string,
+): Promise<SopDocument> {
   const resetDoc: SopDocument = {
     ...INITIAL_SOP_DOCUMENT,
-    id
+    id,
   };
   await saveSopDocument(resetDoc);
   return resetDoc;
@@ -273,7 +304,7 @@ export async function resetSopDocumentToDefault(id: string): Promise<SopDocument
 
 export async function getAllUserAccounts(): Promise<UserAccount[]> {
   try {
-    const res = await fetch('/api/auth/users');
+    const res = await fetch("/api/auth/users");
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) {
@@ -282,7 +313,7 @@ export async function getAllUserAccounts(): Promise<UserAccount[]> {
       }
     }
   } catch (err) {
-    console.warn('[DB Client] Memuat akun dari penyimpanan lokal:', err);
+    console.warn("[DB Client] Memuat akun dari penyimpanan lokal:", err);
   }
 
   return getFallbackUsers();
@@ -298,7 +329,7 @@ function getFallbackUsers(): UserAccount[] {
       }
     }
   } catch (e) {
-    console.error('Error reading localStorage users', e);
+    console.error("Error reading localStorage users", e);
   }
   const defaultList = [DEFAULT_USER_ACCOUNT];
   localStorage.setItem(LS_USERS_KEY, JSON.stringify(defaultList));
@@ -310,69 +341,76 @@ export async function saveUserAccountToDb(account: UserAccount): Promise<void> {
   const normalizedAccount: UserAccount = {
     ...account,
     email: cleanEmail,
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
   };
 
   // Sync with Express / MySQL backend
   try {
     const activeAccount = getStoredActiveUser();
-    await fetch(`/api/auth/users/${encodeURIComponent(cleanEmail)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+    await fetch(apiUrl(`/api/auth/users/${encodeURIComponent(cleanEmail)}`), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         password: normalizedAccount.password,
         fullName: normalizedAccount.fullName,
         nip: normalizedAccount.nip,
         roleTitle: normalizedAccount.roleTitle,
-        currentActorEmail: activeAccount?.email || cleanEmail
-      })
+        currentActorEmail: activeAccount?.email || cleanEmail,
+      }),
     });
   } catch (e) {
-    console.warn('API save user account error, saving locally:', e);
+    console.warn("API save user account error, saving locally:", e);
   }
 
   // Local sync
   try {
     const current = getFallbackUsers();
-    const idx = current.findIndex(u => u.email.trim().toLowerCase() === cleanEmail);
+    const idx = current.findIndex(
+      (u) => u.email.trim().toLowerCase() === cleanEmail,
+    );
     if (idx >= 0) {
       current[idx] = normalizedAccount;
     } else {
       current.push(normalizedAccount);
     }
     localStorage.setItem(LS_USERS_KEY, JSON.stringify(current));
-    localStorage.setItem('sim_sop_email_account_v2', JSON.stringify(normalizedAccount));
+    localStorage.setItem(
+      "sim_sop_email_account_v2",
+      JSON.stringify(normalizedAccount),
+    );
 
-    const store = await getIndexDBStore(STORE_USERS, 'readwrite');
+    const store = await getIndexDBStore(STORE_USERS, "readwrite");
     store.put(normalizedAccount);
   } catch (e) {
-    console.warn('LocalStorage save failed for user', e);
+    console.warn("LocalStorage save failed for user", e);
   }
 }
 
-export async function addUserAccountToDb(account: UserAccount): Promise<boolean> {
+export async function addUserAccountToDb(
+  account: UserAccount,
+): Promise<boolean> {
   const cleanEmail = account.email.trim().toLowerCase();
 
   try {
     const activeAccount = getStoredActiveUser();
-    const res = await fetch('/api/auth/users', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const res = await fetch(apiUrl("/api/auth/users"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         email: cleanEmail,
         password: account.password,
         fullName: account.fullName,
         nip: account.nip,
         roleTitle: account.roleTitle,
-        currentActorEmail: activeAccount?.email || cleanEmail
-      })
+        currentActorEmail: activeAccount?.email || cleanEmail,
+      }),
     });
     if (!res.ok) {
       const err = await res.json();
-      console.warn('Server error on add user:', err);
+      console.warn("Server error on add user:", err);
     }
   } catch (e) {
-    console.warn('Add user API error, cached locally:', e);
+    console.warn("Add user API error, cached locally:", e);
   }
 
   await saveUserAccountToDb(account);
@@ -388,23 +426,27 @@ export async function deleteUserAccountFromDb(email: string): Promise<boolean> {
 
   try {
     const activeAccount = getStoredActiveUser();
-    await fetch(`/api/auth/users/${encodeURIComponent(cleanEmail)}`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ currentActorEmail: activeAccount?.email || 'admin' })
+    await fetch(apiUrl(`/api/auth/users/${encodeURIComponent(cleanEmail)}`), {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        currentActorEmail: activeAccount?.email || "admin",
+      }),
     });
   } catch (e) {
-    console.warn('API delete user error:', e);
+    console.warn("API delete user error:", e);
   }
 
-  const filtered = current.filter(u => u.email.trim().toLowerCase() !== cleanEmail);
+  const filtered = current.filter(
+    (u) => u.email.trim().toLowerCase() !== cleanEmail,
+  );
   localStorage.setItem(LS_USERS_KEY, JSON.stringify(filtered));
 
   try {
-    const store = await getIndexDBStore(STORE_USERS, 'readwrite');
+    const store = await getIndexDBStore(STORE_USERS, "readwrite");
     store.delete(cleanEmail);
   } catch (e) {
-    console.warn('IndexedDB delete user failed', e);
+    console.warn("IndexedDB delete user failed", e);
   }
 
   return true;
@@ -416,17 +458,20 @@ export async function initDatabase(): Promise<void> {
     await getAllSopDocuments();
     await getAllUserAccounts();
   } catch (err) {
-    console.warn('initDatabase fallback to localStorage', err);
+    console.warn("initDatabase fallback to localStorage", err);
   }
 }
 
-export async function findUserByCredentials(email: string, password: string): Promise<UserAccount | null> {
+export async function findUserByCredentials(
+  email: string,
+  password: string,
+): Promise<UserAccount | null> {
   // First attempt verify through Express API (which checks MySQL Laragon `users`)
   try {
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+    const res = await fetch(apiUrl("/api/auth/login"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
     });
     if (res.ok) {
       const data = await res.json();
@@ -437,18 +482,24 @@ export async function findUserByCredentials(email: string, password: string): Pr
           fullName: data.user.fullName,
           nip: data.user.nip,
           roleTitle: data.user.roleTitle,
-          updatedAt: new Date().toISOString()
+          updatedAt: new Date().toISOString(),
         };
       }
     }
   } catch (err) {
-    console.warn('[DB Client] API login check error, checking local store:', err);
+    console.warn(
+      "[DB Client] API login check error, checking local store:",
+      err,
+    );
   }
 
   // Fallback to local accounts
   const users = await getAllUserAccounts();
   const cleanEmail = email.trim().toLowerCase();
-  const match = users.find(u => u.email.trim().toLowerCase() === cleanEmail && u.password === password);
+  const match = users.find(
+    (u) =>
+      u.email.trim().toLowerCase() === cleanEmail && u.password === password,
+  );
   return match || null;
 }
 
@@ -491,43 +542,51 @@ export interface DataChangeLog {
 
 export async function getDatabaseStatus(): Promise<DatabaseStatusResponse | null> {
   try {
-    const res = await fetch('/api/database/status');
+    const res = await fetch(apiUrl("/api/database/status"));
     if (res.ok) {
       return await res.json();
     }
   } catch (err) {
-    console.warn('Failed to fetch database status:', err);
+    console.warn("Failed to fetch database status:", err);
   }
   return null;
 }
 
 export async function getDataChangeLogs(): Promise<DataChangeLog[]> {
   try {
-    const res = await fetch('/api/changes');
+    const res = await fetch(apiUrl("/api/changes"));
     if (res.ok) {
       return await res.json();
     }
   } catch (err) {
-    console.warn('Failed to fetch change logs:', err);
+    console.warn("Failed to fetch change logs:", err);
   }
   return [];
 }
 
-export async function testMySqlConnection(): Promise<{ success: boolean; message: string }> {
+export async function testMySqlConnection(): Promise<{
+  success: boolean;
+  message: string;
+}> {
   try {
-    const res = await fetch('/api/database/test-connection', { method: 'POST' });
+    const res = await fetch(apiUrl("/api/database/test-connection"), {
+      method: "POST",
+    });
     if (res.ok) {
       return await res.json();
     }
   } catch (err: any) {
-    return { success: false, message: err.message || 'Gagal menghubungi server' };
+    return {
+      success: false,
+      message: err.message || "Gagal menghubungi server",
+    };
   }
-  return { success: false, message: 'Server tidak merespons' };
+  return { success: false, message: "Server tidak merespons" };
 }
 
 function getStoredActiveUser(): UserAccount | null {
   try {
-    const raw = localStorage.getItem('sim_sop_email_account_v2');
+    const raw = localStorage.getItem("sim_sop_email_account_v2");
     if (raw) return JSON.parse(raw);
   } catch {
     // ignore
