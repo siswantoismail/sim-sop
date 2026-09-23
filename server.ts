@@ -3,7 +3,6 @@ import path from "path";
 import fs from "fs";
 import mysql from "mysql2/promise";
 import dotenv from "dotenv";
-import cors from "cors";
 import { createServer as createViteServer } from "vite";
 
 dotenv.config();
@@ -57,24 +56,27 @@ const isRemoteDb = Boolean(
 );
 
 // CORS Middleware for Vercel Frontend & external client connections
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Permissive for Vercel (*.vercel.app), localhost, custom domains, or server-to-server
-      callback(null, true);
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "x-user-email",
-      "x-requested-with",
-      "Accept",
-      "Origin",
-    ],
-  }),
-);
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  } else {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  }
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+  );
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-user-email",
+  );
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+  next();
+});
 
 app.use(express.json({ limit: "15mb" }));
 app.use(express.urlencoded({ extended: true, limit: "15mb" }));
